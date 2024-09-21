@@ -9,7 +9,7 @@ import shutil
 import yaml
 
 input_root = os.getcwd()
-output_root = os.path.join(os.getcwd(), 'output')
+output_root = os.path.join(os.getcwd(), 'html')
 
 boilerplate = '''
 <!DOCTYPE html>

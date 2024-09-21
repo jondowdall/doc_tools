@@ -1,0 +1,11 @@
+template: template.html
+
+value1: 23
+list1: [25, 645, 3, 3455]
+string: a string
+para: |
+  a longer string plit onto multiple lines
+
+  - line 1
+  - line 2
+ 

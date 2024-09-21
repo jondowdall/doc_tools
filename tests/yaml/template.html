@@ -1,0 +1,76 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>test</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        html {
+            font-family: sans-serif;
+            box-sizing: border-box;
+        }
+
+        *,
+        *:before,
+        *:after {
+            box-sizing: inherit;
+        }
+
+        table, th, td {
+            border-collapse: collapse;
+            border: 1px solid gray;
+        }
+
+        th, td {
+            padding: 0.3em;
+        }
+
+        th {
+            background: lightgray;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+        }
+
+        .updated {
+            position: fixed;
+            top: 0.5em;
+            right: 0.5em;
+            font-weight: bold;
+        }
+
+        .mermaid-pre {
+            visibility: hidden;
+        }
+    </style>
+</head>
+<body>
+    <div class="updated">Updated: 20/09/2024</div>
+    <h1 id="a-simple-test">A simple test</h1>
+
+<p>A test file to chek the generation of HTML from mark down</p>
+
+    <script src="script.js"></script>
+    <script type="module" defer>
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@9/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({
+            securityLevel: 'loose',
+            startOnLoad: true
+        });
+        let observer = new MutationObserver(mutations => {
+            for(let mutation of mutations) {
+            mutation.target.style.visibility = "visible";
+            }
+        });
+        document.querySelectorAll("pre.mermaid-pre div.mermaid").forEach(item => {
+            observer.observe(item, { 
+            attributes: true, 
+            attributeFilter: ['data-processed'] });
+        });
+    </script>
+</body>
+</html>
