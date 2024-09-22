@@ -1,3 +1,4 @@
+from argtools import command, argument
 import csv
 from datetime import date
 from datetime import datetime
@@ -9,8 +10,6 @@ import re
 import shutil
 import yaml
 
-input_root = os.getcwd()
-output_root = os.path.join(os.getcwd(), 'html')
 
 boilerplate = '''
 <!DOCTYPE html>
@@ -87,7 +86,6 @@ boilerplate = '''
 </html>
 '''
 
-force = False
 eval_globals = dict([(fn, getattr(math, fn)) for fn in dir(math)])
 
 extras = ['tables', 'strike', 'cuddled-lists', 'fenced-code-blocks',
@@ -142,17 +140,16 @@ def fix_name(name):
         name = '_' + name
     return name.strip()
 
-
-def process_dir(path):
+def process_dir(source, destination, force):
     '''Recursively process all the files in the directory.'''
-    log (f'Processing directory {path}')
-    fullpath = os.path.normpath(os.path.join(input_root, path))
+    log (f'Processing directory {source}')
+    fullpath = os.path.normpath(source) #os.path.normpath(os.path.join(source, path))
 
     # Don't process the output directory if it's in the tree
-    if fullpath == os.path.normpath(output_root):
+    if fullpath == os.path.normpath(destination):
         return
 
-    output_path = os.path.join(output_root, path)
+    output_path = os.path.normpath(destination) #os.path.join(output_root, path)
     if not os.path.exists(output_path):
         os.makedirs(output_path)
         log(f'make dir {output_path}')
@@ -260,7 +257,6 @@ def process_dir(path):
                 log (f'Updating {output_file}')
                 with open(output_file, 'w') as file:
                     file.write(result)
-
                     
     for image_file in image_files:
         fullname = os.path.join(fullpath, image_file)
@@ -270,6 +266,20 @@ def process_dir(path):
             shutil.copy(fullname, destination)
 
     for directory in directories:
-        process_dir(os.path.join(path, directory))
+        if os.path.join(source, directory) != destination:
+            process_dir(os.path.join(source, directory), os.path.join(destination, directory), force)
 
-process_dir('')
+@command
+@argument('--source', default=os.getcwd(), help='directory of source files')
+@argument('--destination', default=os.path.join(os.getcwd(), 'html'), help='destination to write files to')
+@argument('--force', default=False, help='an optional argument')
+def main(args):
+    """ One line description here
+
+    Write details here (printed with --help|-h)
+    """
+    process_dir(args.source, args.destination, args.force)
+
+
+if __name__ == '__main__':
+    command.run()
