@@ -1,5 +1,6 @@
 import csv
 from datetime import date
+from datetime import datetime
 import difflib
 import markdown2
 import math
@@ -117,10 +118,15 @@ def process(template, data, meta):
 
     def replace(match):
         try:
-            if match.group(2) and isinstance(data[match.group(2)], list):
-                source = data[match.group(2)]
+            if match.group(2):
+                source = data[match.group(2)] if match.group(2) != '*' else meta['data']
                 template = match.group(3)
-                return '\n'.join([str(eval(f"f'{template}'", data, item)) for item in source])
+                print (source)
+                print (template)
+                if isinstance(data[match.group(2)], list):
+                    return '\n'.join([str(eval(f"f'{template}'", data, item)) for item in source])
+                if isinstance(data[match.group(2)], dict):
+                    return '\n'.join([str(eval(f"f'{template}'", {**data, **{'key': key}}, source[key])) for key in source])
             item = str(match.group(1))
             if item.startswith('#'):
                 processed = str(eval(item[1:], context, data))
@@ -136,7 +142,7 @@ def fix_name(name):
     name = name.translate(translation)
     if re.match('[0-9]', name):
         name = '_' + name
-    return name
+    return name.strip()
 
 
 def process_dir(path):
@@ -156,6 +162,7 @@ def process_dir(path):
         log(f'make dir {output_path}')
 
     filenames = [filename for filename in os.listdir(fullpath)]
+    filenames.sort(key=lambda x: os.path.getmtime(os.path.join(fullpath, x)))
     directories = [file for file in filenames if os.path.isdir(os.path.join(fullpath, file))]
     image_files = [file for file in filenames if os.path.splitext(file)[1].lower in ['.png', '.jpg']]
     content = [os.path.splitext(filename) for filename in filenames]
@@ -163,8 +170,11 @@ def process_dir(path):
     csv_files = [file for file in content if file[1] == '.csv']
     markdown_files = [file for file in content if file[1] == '.md']
 
-    data = {}
-    # Using the first row as the property names, generate a single item for each subsequent row of the file
+
+    # Read data from csv and yaml files
+
+    data = {'index': {'template': 'index.html', 'modification_time': datetime.timestamp(datetime.now())}}
+    # Using the first row as the property names, generate a single entry for each subsequent row of the csv
     for name, extension in csv_files:
         fullname = os.path.join(fullpath, f'{name}{extension}')
         mtime = os.path.getmtime(fullname)
@@ -173,18 +183,16 @@ def process_dir(path):
             for row in csv.reader(csv_file):
                 if header:
                     item_name = row[0].replace('/', '_').replace(':', '_')
-                    data[item_name] = {
-                        'template':  os.path.join(fullpath, f'{name}.html'),
-                        'modification_time': mtime
-                    }
-                    for i in range(len(header)):
+                    if item_name not in data:
+                        data[item_name] = { 'template':  os.path.join(fullpath, f'{name}.html') }
+                    data[item_name]['modification_time'] = mtime
+                    for i in range(len(header)):    # Allow for Jira's habbit of repeating header for list fields
                         if header[i] in data[item_name]:
                             data[item_name][header[i]] += f'\n\n{row[i]}'
                         else:
                             data[item_name][header[i]] = row[i]
                 else:
                     header = [fix_name(item) for item in row]
-                    #log ('\n'.join(header))
 
     # Process YAML files overwriting data from csv if item names match
     for name, extension in yaml_files:
@@ -192,28 +200,35 @@ def process_dir(path):
         with open(fullname) as stream:
             try:
                 yaml_data = yaml.safe_load(stream)
-                data[name] = dict([(fix_name(key), yaml_data[key]) for key in yaml_data])
+                if name not in data:
+                    data[name] = dict([(fix_name(key), yaml_data[key]) for key in yaml_data])
+                else:
+                    for key in yaml_data:
+                        data[name][fix_name(key)] = yaml_data[key]
                 if 'Title' not in data[name]:
                     data[name]['Title'] = name
                 data[name]['modification_time'] = os.path.getmtime(fullname)
-                if 'template' in data[name] and not os.path.exists(data[name]['template']):
-                    data[name]['template'] = os.path.join(fullpath, data[name]['template'])
             except yaml.YAMLError as exc:
                 print (exc)
 
+    templated = [templated for templated in data if 'template' in data[templated]]
 
-    keys = [key for key in data
-            if 'template' in data[key] and os.path.exists(data[key]['template'])]
-    missing = ', '.join([key for key in data
-            if 'template' in data[key] and not os.path.exists(data[key]['template'])])
+    for name in templated:
+        if not os.path.exists(data[name]['template']):
+            data[name]['template'] = os.path.join(fullpath, data[name]['template'])
+
+    found = [name for name in templated if os.path.exists(data[name]['template'])]
+    missing = [name for name in templated if name != 'index' and not os.path.exists(data[name]['template'])]
     if len(missing) > 0:
-        log (f'Template file not found for {missing}')
+        log (f'Template file not found for {", ".join(missing)}')
 
-    keys.sort()
-    templates = set([data[key]['template'] for key in keys])
+    found.sort()
+    templates = set([data[name]['template'] for name in found])
+ 
+    index = [f' - [{name}]({name}.html)' for name in found if name != 'index']
+    meta = {'index': '\n'.join(index), 'data': data}
 
-    index = [f' - [{key}]({key}.html)' for key in keys]
-    meta = {'index': '\n'.join(index)}
+    # Generate files from template files
 
     for template_file in templates:
         with open(template_file) as file:
@@ -230,7 +245,7 @@ def process_dir(path):
                     if os.path.splitext(template_file)[1] == '.md':
                         content = markdown2.markdown(source, extras=extras)
                         result = boilerplate.replace('%TITLE%', key)\
-                            .replace('%MDATE%', mdate)\
+                            .replace('%UPDATED%', mdate)\
                             .replace('%CONTENT%', content)
                     else:
                         result = source.replace('%TITLE%', key)\
@@ -259,7 +274,7 @@ def process_dir(path):
 
     for image_file in image_files:
         fullname = os.path.join(fullpath, image_file)
-        destination = os.path.join(output_path, filename)
+        destination = os.path.join(output_path, image_file)
         log (f'Copying {fullname}')
         if force or not os.path.exists(destination) or os.path.getmtime(destination) < os.path.getmtime(fullname):
             shutil.copy(fullname, destination)
