@@ -104,9 +104,9 @@ def sum(expr):
     return result
 
 
-def process(template, data, meta):
+def process(template, item, all_items):
     pattern = re.compile('\{(\S[^\}]*)\}|\[([^:]+):\s*([^\]]+)\]')
-    context = {**eval_globals, **meta}
+    context = {**eval_globals, **all_items}
 
     def sum(list, expr):
         result = 0
@@ -119,19 +119,17 @@ def process(template, data, meta):
     def replace(match):
         try:
             if match.group(2):
-                source = data[match.group(2)] if match.group(2) != '*' else meta['data']
+                source = item[match.group(2)] if match.group(2) != '*' else all_items
                 template = match.group(3)
-                print (source)
-                print (template)
-                if isinstance(data[match.group(2)], list):
-                    return '\n'.join([str(eval(f"f'{template}'", data, item)) for item in source])
-                if isinstance(data[match.group(2)], dict):
-                    return '\n'.join([str(eval(f"f'{template}'", {**data, **{'key': key}}, source[key])) for key in source and not key.startswith('_')])
-            item = str(match.group(1))
-            if item.startswith('#'):
-                processed = str(eval(item[1:], context, data))
+                if isinstance(source, list) or isinstance(source, set):
+                    return '\n'.join([str(eval(f"f'{template}'", all_items, item)) for item in source])
+                if isinstance(source, dict):
+                    return '\n'.join([str(eval(f"f'{template}'", {**all_items, **{'key': key}}, item)) for key, item in source.items()])
+            element = str(match.group(1))
+            if element.startswith('#'):
+                processed = str(eval(element[1:], context, item))
                 return markdown2.markdown(processed, extras=extras)
-            return str(eval(item, context, data))
+            return str(eval(element, context, item))
         except:
             return match.group(0)
 
@@ -148,14 +146,12 @@ def fix_name(name):
 def process_dir(path):
     '''Recursively process all the files in the directory.'''
     log (f'Processing directory {path}')
-    fullpath = os.path.join(input_root, path)
+    fullpath = os.path.normpath(os.path.join(input_root, path))
 
     # Don't process the output directory if it's in the tree
-    if os.path.normpath(fullpath) == os.path.normpath(output_root):
+    if fullpath == os.path.normpath(output_root):
         return
 
-    #print (os.path.normpath(fullpath))
-    #print (os.path.normpath(output_root))
     output_path = os.path.join(output_root, path)
     if not os.path.exists(output_path):
         os.makedirs(output_path)
@@ -164,16 +160,17 @@ def process_dir(path):
     filenames = [filename for filename in os.listdir(fullpath)]
     filenames.sort(key=lambda x: os.path.getmtime(os.path.join(fullpath, x)))
     directories = [file for file in filenames if os.path.isdir(os.path.join(fullpath, file))]
-    image_files = [file for file in filenames if os.path.splitext(file)[1].lower in ['.png', '.jpg']]
+    image_files = [file for file in filenames if os.path.splitext(file)[1].lower() in ['.png', '.jpg']]
     content = [os.path.splitext(filename) for filename in filenames]
     yaml_files = [file for file in content if file[1] == '.yaml']
     csv_files = [file for file in content if file[1] == '.csv']
+    template_files = dict([(os.path.join(fullpath, name), set()) for name in filenames
+                            if os.path.splitext(name)[1].lower() in ['.md', '.html']])
     markdown_files = [file for file in content if file[1] == '.md']
 
 
     # Read data from csv and yaml files
-
-    data = {'_index': {'template': 'index.html', 'modification_time': datetime.timestamp(datetime.now())}}
+    data = {} #'_index': {'template': 'index.html', 'modification_time': datetime.timestamp(datetime.now())}}
     # Using the first row as the property names, generate a single entry for each subsequent row of the csv
     for name, extension in csv_files:
         fullname = os.path.join(fullpath, f'{name}{extension}')
@@ -211,75 +208,57 @@ def process_dir(path):
             except yaml.YAMLError as exc:
                 print (exc)
 
-    templated = [templated for templated in data if 'template' in data[templated]]
+    for name, item in data.items():
+        if 'template' in item:
+            template = os.path.normpath(item['template'])
+            if not os.path.exists(template):
+                template = os.path.normpath(os.path.join(fullpath, item['template']))
+            if os.path.exists(template):
+                if template in template_files:
+                    template_files[template].add(name)
+                else:
+                    template_files[template] = {name} 
+            else:
+                log(f'Template ({template}) for {name} not found!')
+        elif name in [os.path.splitext(os.path.basename(filename))[0] for filename in template_files]:
+            template = [template for template in template_files if name == os.path.splitext(os.path.basename(template))[0]][0]
+            template_files[template].add(name)
+        else:
+           log(f'no template found for {name}')
+          
 
-    for name in templated:
-        if not os.path.exists(data[name]['template']):
-            data[name]['template'] = os.path.join(fullpath, data[name]['template'])
-
-    found = [name for name in templated if os.path.exists(data[name]['template'])]
-    missing = [name for name in templated if name != 'index' and not os.path.exists(data[name]['template'])]
-    if len(missing) > 0:
-        log (f'Template file not found for {", ".join(missing)}')
-
-    found.sort()
-    templates = set([data[name]['template'] for name in found])
- 
-    index = [f' - [{name}]({name}.html)' for name in found if name != 'index']
-    meta = {'index': '\n'.join(index), 'data': data}
-
-    # Generate files from template files
-
-    for template_file in templates:
+    for template_file, names in template_files.items():
         with open(template_file) as file:
             template  = file.read()
-        for key in data:
-            instance = data[key]
-            if instance.get('template', '') == template_file:
-                output_file = os.path.join(output_path, f'{key}.html')
-                if force or not os.path.exists(output_file) \
-                    or os.path.getmtime(output_file) < data[key]['modification_time'] \
-                    or os.path.getmtime(output_file) < os.path.getmtime(template_file):
-                    mdate = date.fromtimestamp(data[key]['modification_time']).strftime('%d/%m/%Y')
-                    source = process(template, instance, meta)
-                    if os.path.splitext(template_file)[1] == '.md':
-                        content = markdown2.markdown(source, extras=extras)
-                        result = boilerplate.replace('%TITLE%', key)\
-                            .replace('%UPDATED%', mdate)\
-                            .replace('%CONTENT%', content)
-                    else:
-                        result = source.replace('%TITLE%', key)\
-                            .replace('%UPDATED%', mdate)
-                    output_file = os.path.join(output_path, f'{key}.html')
-                    log (f'Updating {output_file}')
-                    with open(output_file, 'w') as file:
-                        file.write(result)
+        
+        if len(names) > 0:
+            sources = dict([(name, data[name]) for name in names])
+        else:
+            mtime = os.path.getmtime(template_file)
+            name = os.path.splitext(os.path.basename(template_file))[0]
+            sources = {name: {'modification_time': mtime}}
 
-    for name, extension in markdown_files:
-        fullname = os.path.join(fullpath, f'{name}{extension}')
-        output_file = os.path.join(output_path, f'{name}.html')
-        if force or not os.path.exists(output_file) \
-            or os.path.getmtime(output_file) < os.path.getmtime(fullname):
-            mdate = date.fromtimestamp(os.path.getmtime(fullname)).strftime('%d/%m/%Y')
-            with open(fullname) as file:
-                markdown  = file.read()
-                source = process(markdown, data, meta)
-                content = markdown2.markdown(source, extras=extras)
-                result = boilerplate.replace('%TITLE%', name)\
-                .replace('%UPDATED%', mdate)\
-                .replace('%CONTENT%', content)
+        for name, item in sources.items():
+            output_file = os.path.join(output_path, f'{name}.html')
+            if force or not os.path.exists(output_file) \
+                or os.path.getmtime(output_file) < item['modification_time'] \
+                or os.path.getmtime(output_file) < os.path.getmtime(template_file):
+                mdate = date.fromtimestamp(item['modification_time']).strftime('%d/%m/%Y')
+                source = process(template, item, data)
+                if os.path.splitext(template_file)[1] == '.md':
+                    content = markdown2.markdown(source, extras=extras)
+                    result = boilerplate.replace('%TITLE%', name)\
+                        .replace('%UPDATED%', mdate)\
+                        .replace('%CONTENT%', content)
+                else:
+                    result = source.replace('%TITLE%', name)\
+                        .replace('%UPDATED%', mdate)
                 log (f'Updating {output_file}')
                 with open(output_file, 'w') as file:
                     file.write(result)
 
-    for image_file in image_files:
-        fullname = os.path.join(fullpath, image_file)
-        destination = os.path.join(output_path, image_file)
-        log (f'Copying {fullname}')
-        if force or not os.path.exists(destination) or os.path.getmtime(destination) < os.path.getmtime(fullname):
-            shutil.copy(fullname, destination)
-
     for directory in directories:
         process_dir(os.path.join(path, directory))
+ 
 
 process_dir('')
