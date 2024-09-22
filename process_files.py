@@ -126,7 +126,7 @@ def process(template, data, meta):
                 if isinstance(data[match.group(2)], list):
                     return '\n'.join([str(eval(f"f'{template}'", data, item)) for item in source])
                 if isinstance(data[match.group(2)], dict):
-                    return '\n'.join([str(eval(f"f'{template}'", {**data, **{'key': key}}, source[key])) for key in source])
+                    return '\n'.join([str(eval(f"f'{template}'", {**data, **{'key': key}}, source[key])) for key in source and not key.startswith('_')])
             item = str(match.group(1))
             if item.startswith('#'):
                 processed = str(eval(item[1:], context, data))
@@ -173,7 +173,7 @@ def process_dir(path):
 
     # Read data from csv and yaml files
 
-    data = {'index': {'template': 'index.html', 'modification_time': datetime.timestamp(datetime.now())}}
+    data = {'_index': {'template': 'index.html', 'modification_time': datetime.timestamp(datetime.now())}}
     # Using the first row as the property names, generate a single entry for each subsequent row of the csv
     for name, extension in csv_files:
         fullname = os.path.join(fullpath, f'{name}{extension}')
