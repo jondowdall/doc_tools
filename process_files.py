@@ -102,9 +102,9 @@ def sum(expr):
     return result
 
 
-def process(template, item, all_items):
+def process(template, item, meta):
     pattern = re.compile('\{(\S[^\}]*)\}|\[([^:]+):\s*([^\]]+)\]')
-    context = {**eval_globals, **all_items}
+    context = {**eval_globals, **meta['data']}
 
     def sum(list, expr):
         result = 0
@@ -117,12 +117,19 @@ def process(template, item, all_items):
     def replace(match):
         try:
             if match.group(2):
-                source = item[match.group(2)] if match.group(2) != '*' else item
+                if match.group(2) == '*':
+                    source = meta['data']
+                elif match.group(2) == '**':
+                    source = item
+                elif match.group(2).startswith('*'):
+                    source = meta[match.group(2)[1:]]
+                else:
+                    source = item[match.group(2)]
                 template = match.group(3)
                 if isinstance(source, list) or isinstance(source, set):
-                    return '\n'.join([str(eval(f"f'{template}'", all_items, item)) for item in source])
+                    return '\n'.join([str(eval(f"f'{template}'", meta['data'], item)) for item in source])
                 if isinstance(source, dict):
-                    return '\n'.join([str(eval(f"f'{template}'", {**all_items, **{'key': key}}, item)) for key in source])
+                    return '\n'.join([str(eval(f"f'{template}'", {**meta['data'], **{'key': key}}, item)) for key in source])
             element = str(match.group(1))
             if element.startswith('#'):
                 processed = str(eval(element[1:], context, item))
@@ -130,8 +137,8 @@ def process(template, item, all_items):
             return str(eval(element, context, item))
         except:
             return match.group(0)
-
     return pattern.sub(replace, template)
+
 
 def fix_name(name):
     translation = str.maketrans(' /()?$%,-#.&:', '_____________')
@@ -140,38 +147,40 @@ def fix_name(name):
         name = '_' + name
     return name.strip()
 
+
 def process_dir(source, destination, force):
     '''Recursively process all the files in the directory.'''
-    log (f'Processing directory {source}')
-    fullpath = os.path.normpath(source) #os.path.normpath(os.path.join(source, path))
 
-    # Don't process the output directory if it's in the tree
-    if fullpath == os.path.normpath(destination):
-        return
+    source_dir = os.path.abspath(source)
+    destination_dir = os.path.abspath(destination)
+    log (f'Processing directory {source_dir}')
 
-    output_path = os.path.normpath(destination) #os.path.join(output_root, path)
-    if not os.path.exists(output_path):
-        os.makedirs(output_path)
-        log(f'make dir {output_path}')
+    if not os.path.exists(destination_dir):
+        os.makedirs(destination_dir)
+        log(f'make dir {destination_dir}')
 
-    filenames = [filename for filename in os.listdir(fullpath)]
-    filenames.sort(key=lambda x: os.path.getmtime(os.path.join(fullpath, x)))
-    directories = [file for file in filenames if os.path.isdir(os.path.join(fullpath, file))]
+    filenames = [filename for filename in os.listdir(source_dir)]
+    filenames.sort(key=lambda x: os.path.getmtime(os.path.join(source_dir, x)))
+    directories = [file for file in filenames if os.path.isdir(os.path.join(source_dir, file))]
     image_files = [file for file in filenames if os.path.splitext(file)[1].lower() in ['.png', '.jpg']]
 
     content = [os.path.splitext(filename) for filename in filenames]
     yaml_files = [file for file in content if file[1] == '.yaml']
     csv_files = [file for file in content if file[1] == '.csv']
-    template_files = dict([(os.path.join(fullpath, name), set()) for name in filenames
+    template_files = dict([(os.path.join(source_dir, name), set()) for name in filenames
                             if os.path.splitext(name)[1].lower() in ['.md', '.html']])
     markdown_files = [file for file in content if file[1] == '.md']
 
-
+    tree = {}
+    for directory in directories:
+        if os.path.join(source_dir, directory) != destination_dir:
+           tree[directory] = process_dir(os.path.join(source_dir, directory), os.path.join(destination_dir, directory), force)
+    
     # Read data from csv and yaml files
     data = {}
-    # Using the first row as the property names, generate a single entry for each subsequent row of the csv
+    # Use the first row as the property names, generate a single entry for each subsequent row of the csv
     for filename, extension in csv_files:
-        fullname = os.path.join(fullpath, f'{filename}{extension}')
+        fullname = os.path.join(source_dir, f'{filename}{extension}')
         mtime = os.path.getmtime(fullname)
         with open(fullname) as csv_file:
             header = None
@@ -179,7 +188,7 @@ def process_dir(source, destination, force):
                 if header:
                     name = row[0].replace('/', '_').replace(':', '_')
                     if name not in data:
-                        data[name] = { 'template': os.path.join(fullpath, f'{filename}.html'), 'content': {} }
+                        data[name] = { 'template': os.path.join(source_dir, f'{filename}.html'), 'content': {} }
                     data[name]['modification_time'] = mtime
                     content = data[name]['content']
                     for i in range(len(header)):    # Allow for Jira's habbit of repeating header for list fields
@@ -192,7 +201,7 @@ def process_dir(source, destination, force):
 
     # Process YAML files overwriting data from csv if item names match
     for name, extension in yaml_files:
-        fullname = os.path.join(fullpath, f'{name}{extension}')
+        fullname = os.path.join(source_dir, f'{name}{extension}')
         with open(fullname) as stream:
             try:
                 yaml_data = yaml.safe_load(stream)
@@ -213,7 +222,7 @@ def process_dir(source, destination, force):
         if 'template' in item:
             template = os.path.normpath(item['template'])
             if not os.path.exists(template):
-                template = os.path.normpath(os.path.join(fullpath, item['template']))
+                template = os.path.normpath(os.path.join(source_dir, item['template']))
             if os.path.exists(template):
                 if template in template_files:
                     template_files[template].add(name)
@@ -226,7 +235,14 @@ def process_dir(source, destination, force):
             template_files[template].add(name)
         else:
            log(f'no template found for {name}')
-          
+
+    meta = {
+        'directories': directories,
+        'tree': tree,
+        'images': image_files,
+        'templates': template_files,
+        'data': data
+    }
 
     for template_file, names in template_files.items():
         with open(template_file) as file:
@@ -240,12 +256,12 @@ def process_dir(source, destination, force):
             sources = {name: { 'modification_time': mtime, 'content': data }}
     
         for name, item in sources.items():
-            output_file = os.path.join(output_path, f'{name}.html')
+            output_file = os.path.join(destination_dir, f'{name}.html')
             if force or not os.path.exists(output_file) \
                 or os.path.getmtime(output_file) < item['modification_time'] \
                 or os.path.getmtime(output_file) < os.path.getmtime(template_file):
                 mdate = date.fromtimestamp(item['modification_time']).strftime('%d/%m/%Y')
-                source = process(template, item['content'], data)
+                source = process(template, item['content'], meta)
                 if os.path.splitext(template_file)[1] == '.md':
                     content = markdown2.markdown(source, extras=extras)
                     result = boilerplate.replace('%TITLE%', name)\
@@ -257,22 +273,20 @@ def process_dir(source, destination, force):
                 log (f'Updating {output_file}')
                 with open(output_file, 'w') as file:
                     file.write(result)
-                    
+
     for image_file in image_files:
-        fullname = os.path.join(fullpath, image_file)
-        destination = os.path.join(output_path, filename)
+        fullname = os.path.join(source_dir, image_file)
+        destination = os.path.join(destination_dir, filename)
         log (f'Copying {fullname}')
         if force or not os.path.exists(destination) or os.path.getmtime(destination) < os.path.getmtime(fullname):
             shutil.copy(fullname, destination)
 
-    for directory in directories:
-        if os.path.join(source, directory) != destination:
-            process_dir(os.path.join(source, directory), os.path.join(destination, directory), force)
+    return tree
 
 @command
 @argument('--source', default=os.getcwd(), help='directory of source files')
 @argument('--destination', default=os.path.join(os.getcwd(), 'html'), help='destination to write files to')
-@argument('--force', default=False, help='an optional argument')
+@argument('--force', action='store_true', help='an optional argument')
 def main(args):
     """ One line description here
 
