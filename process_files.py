@@ -165,17 +165,17 @@ def process_dir(source, destination, force):
     if not os.path.exists(destination_dir):
         os.makedirs(destination_dir)
         log(f'make dir {destination_dir}')
-
+        
     filenames = [filename for filename in os.listdir(source_dir)]
-    filenames.sort(key=lambda x: os.path.getmtime(os.path.join(source_dir, x)))
     directories = [file for file in filenames if os.path.isdir(os.path.join(source_dir, file))]
     image_files = [file for file in filenames if os.path.splitext(file)[1].lower() in ['.png', '.jpg']]
+    template_files = dict([(os.path.join(source_dir, name), set()) for name in filenames
+                            if os.path.splitext(name)[1].lower() in ['.md', '.html']])
 
+    filenames.sort(key=lambda x: os.path.getmtime(os.path.join(source_dir, x)))
     content = [os.path.splitext(filename) for filename in filenames]
     yaml_files = [file for file in content if file[1] == '.yaml']
     csv_files = [file for file in content if file[1] == '.csv']
-    template_files = dict([(os.path.join(source_dir, name), set()) for name in filenames
-                            if os.path.splitext(name)[1].lower() in ['.md', '.html']])
     markdown_files = [file for file in content if file[1] == '.md']
 
     tree = {}
