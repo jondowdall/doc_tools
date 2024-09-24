@@ -86,7 +86,7 @@ boilerplate = '''
 </html>
 '''
 
-eval_globals = dict([(fn, getattr(math, fn)) for fn in dir(math)])
+eval_globals = dict([(fn, getattr(math, fn)) for fn in dir(math) if not fn.startswith('_')])
 
 extras = ['tables', 'strike', 'cuddled-lists', 'fenced-code-blocks',
           'header-ids', 'numbering', 'task-list', 'wiki-tables', 'mermaid']
@@ -101,10 +101,16 @@ def sum(expr):
         result += eval(expr, data, item)
     return result
 
+def to_dict(obj):
+    if isinstance(obj, dict):
+        return obj
+    elif isinstance(obj, list):
+        return dict([(f'_{i}', obj[i]) for i in range(len(obj))])
+    return {'key': obj}
 
 def process(template, item, meta):
     pattern = re.compile('\{(\S[^\}]*)\}|\[([^:]+):\s*([^\]]+)\]')
-    context = {**eval_globals, **meta['data']}
+    context = {**eval_globals, **meta}
 
     def sum(list, expr):
         result = 0
@@ -127,7 +133,7 @@ def process(template, item, meta):
                     source = item[match.group(2)]
                 template = match.group(3)
                 if isinstance(source, list) or isinstance(source, set):
-                    return '\n'.join([str(eval(f"f'{template}'", meta['data'], item)) for item in source])
+                    return '\n'.join([str(eval(f"f'{template}'", meta['data'], to_dict(item))) for item in source])
                 if isinstance(source, dict):
                     return '\n'.join([str(eval(f"f'{template}'", {**meta['data'], **{'key': key}}, item)) for key in source])
             element = str(match.group(1))
@@ -135,7 +141,8 @@ def process(template, item, meta):
                 processed = str(eval(element[1:], context, item))
                 return markdown2.markdown(processed, extras=extras)
             return str(eval(element, context, item))
-        except:
+        except Exception as e:
+            print(e)
             return match.group(0)
     return pattern.sub(replace, template)
 
