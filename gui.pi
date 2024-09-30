@@ -1,0 +1,289 @@
+import tkinter as tk
+from tkinter import ttk
+from tkinter import filedialog
+
+from datetime import datetime
+import os
+from os.path import join, islink
+import shutil
+import exifread
+import ffmpeg
+import magic
+
+source_root = os.path.abspath('P:/')
+destination_root = os.path.abspath('P:/')
+include_subdirectories = False
+force = False
+test_only = True
+
+
+def print_tags(tags):
+    """Display the exif tags."""
+    for tag in tags.keys():
+        if tag not in ('JPEGThumbnail', 'TIFFThumbnail', 'Filename', 'EXIF MakerNote'):
+            print ("Key: ", tag, " value: ", tags[tag])
+
+
+
+#### File actions
+
+
+
+def copy(file, destination_root):
+    source = file.path
+    destination = file.get_destination(destination_root)
+    if os.path.exists(destination) and not force:
+        print (f'Skipping {destination} as file already exists, use --force to force overwrite')
+        return
+    print(f'copy from {source} to {destination}')
+    if not test_only:
+        shutil.copy(source, destination)
+
+def move(file, destination_root):
+    source = file.path
+    destination = file.get_destination(destination_root)
+    if os.path.exists(destination) and not force:
+        print (f'Skipping {destination} as file already exists, use --force to force overwrite')
+        return
+    print(f'move from {source} to {destination}')
+    if not test_only:
+        shutil.move(source, destination)
+
+def link_to(file, destination_root):
+    source = file.path
+    destination = file.get_destination(destination_root)
+    if os.path.exists(destination) and not force:
+        print (f'Skipping {destination} as file already exists, use --force to force overwrite')
+        return
+    print(f'move from {source} to {destination}')
+    if not test_only:
+        shutil.move(source, destination)
+    print(f'link from {source} to {destination}')
+    if not test_only:
+        os.symlink(destination, source)
+
+def link_from(file, destination_root):
+    source = file.path
+    destination = file.get_destination(destination_root)
+    if os.path.exists(destination) and not force:
+        print (f'Skipping {destination} as file already exists, use --force to force overwrite')
+        return
+    print(f'link from {destination} to {source}')
+    if not test_only:
+        os.symlink(source, destination)
+
+
+action = move
+
+class Managed_Directory:
+    def __init__(self, path):
+        self.path = path
+        self.content = {}
+
+
+class Managed_File:
+    def __init__(self, path):
+        self.path = path
+        self.type = magic.from_file(path, mime=True)
+        self.get_date()
+
+    def __str__(self):
+        return f'{self.path} {self.type} {self.date:%m/%d/%Y}'
+
+    def get_date(self):
+        if self.type == 'video/mp4':
+            try:
+                streams = ffmpeg.probe(self.path)["streams"]
+                for stream in streams:
+                    self.date = datetime.fromisoformat(stream["tags"].get('creation_time', '0000-00-00T00:00:00.000000Z'))
+                    return 
+
+            except OSError:
+                print ('Ignoring OSError')
+
+        if self.type == 'image/jpeg':
+            with open(self.path, 'rb') as f:
+                try:
+                    tags = exifread.process_file(f)
+                except OSError:
+                     print ('Ignoring OSError')
+            if 'EXIF DateTimeOriginal' in tags:
+                date_str = str(tags.get('Image DateTime', tags['EXIF DateTimeOriginal']))
+                self.date = datetime.strptime(date_str, '%Y:%m:%d %H:%M:%S')
+                return
+            elif 'Image DateTime' in tags:
+                print('found if "Image DateTime" in tags !!!!')
+
+        print (f'{self.path} ({self.type}) has no date tag, using file creation date')
+        self.date = datetime.fromtimestamp(os.path.getmtime(self.path))
+
+    def get_destination_dir(self, destination_root):
+        path_suffix = os.path.join(f'{self.date:%Y}', f'{self.date:%Y-%m}', f'{self.date:%Y-%m-%d}')
+        path = os.path.abspath(os.path.join(destination_root, path_suffix))
+        if not os.path.exists(path):
+            print (f'Making destination path: {path}')
+            if not test_only:
+                os.makedirs(path)
+        return path
+
+    def get_destination(self, destination_root):
+        basename = os.path.basename(self.path)
+        directory = self.get_destination_dir(destination_root)
+        return os.path.join(directory, basename)
+
+    def check(self):
+        if not os.path.exists(self.path):
+            return f'Source missing!'
+        
+        if os.path.exists(self.get_destination(destination_root)):
+            return f'Destination exists!'
+
+        return 'OK'
+
+
+# Get the list of files starting from the present directory
+all_files = {}
+
+def add_files(root, parent, update):
+    if parent == None:
+        parent = parent=Managed_Directory(root)
+    files = [os.path.abspath(os.path.join(root, file)) for file in os.listdir(root)]
+
+    update(f'Processing {root}')
+
+    if include_subdirectories:
+        for directory in [file for file in files if os.path.isdir(file)]:
+            managed_directory = Managed_Directory(directory)
+            add_files(directory, managed_directory, update)
+            if 'directory' in parent.content:
+                parent.content['directory'].append(managed_directory)
+            else:  
+                parent.content['directory'] = [managed_directory]
+
+    for file in [file for file in files if os.path.isfile(file)]:
+        managed = Managed_File(file)
+        if managed.type in parent.content:
+            parent.content[managed.type].append(managed)
+        else:  
+            parent.content[managed.type] = [managed]
+
+    return parent
+
+
+def populate_tree(tree, source, parent=''):
+    path = source.path if parent == '' else os.path.basename(source.path)
+    iid = tree.insert(parent, tk.END, text=path)
+    if 'directory' in source.content:
+        for item in source.content['directory']:
+            populate_tree(tree, item, iid)
+
+    if 'image/jpeg' in source.content:
+        for item in source.content['image/jpeg']:
+            status = item.check()
+            tag = 'ok' if status == 'OK' else 'error'
+ 
+            tree.insert(iid, tk.END, text=os.path.basename(item.path), tags=tag,
+                        values=('Move', item.get_destination(destination_root), status))
+
+def main():
+    all_files = {}
+    window = tk.Tk()
+    window.title('Photo Manager')
+
+    source_frame = tk.Frame(window)
+    source_frame.pack(fill=tk.X)
+    label1 = ttk.Label(source_frame, text="Source:", font=("Helvetica", 16))
+    label1.pack(side=tk.LEFT, fill=tk.BOTH)
+
+    status = ttk.Label(window, text="Tkinter", font=("Helvetica", 16))
+
+    def update(text):
+        status['text'] = text
+        window.update()
+
+    button1 = ttk.Button(source_frame, text=source_root)
+    button1.pack(side=tk.LEFT, fill=tk.X, expand=1)
+
+    def change_source_directory():
+        global source_root
+        source_root = filedialog.askdirectory()
+        button1['text'] = source_root
+        window.update()
+
+    button1['command'] =change_source_directory
+
+    def add_source_directory():
+        global include_subdirectories
+        include_subdirectories = False
+        update('updating')
+        print(source_root)
+        all_files = add_files(os.path.abspath(source_root), Managed_Directory(source_root), update)
+        populate_tree(treeview, all_files)
+        update('Ready')
+
+    add_source_button = ttk.Button(source_frame, text='Add', command=add_source_directory)
+    add_source_button.pack(side=tk.LEFT)
+
+    def add_width_childen():
+        global include_subdirectories
+        include_subdirectories = True
+        update('updating')
+        print(source_root)
+        all_files = add_files(os.path.abspath(source_root), Managed_Directory(source_root), update)
+        populate_tree(treeview, all_files)
+        update('Ready')
+
+    add_source_button = ttk.Button(source_frame, text='Add All', command=add_width_childen)
+    add_source_button.pack(side=tk.LEFT)
+
+
+    
+    destination_frame = tk.Frame(window)
+    destination_frame.pack(fill=tk.X)
+    label2 = ttk.Label(destination_frame, text="Destination:", font=("Helvetica", 16))
+    label2.pack(side=tk.LEFT, fill=tk.BOTH)
+
+    def update(text):
+        status['text'] = text
+        window.update()
+
+    button2 = ttk.Button(destination_frame, text=destination_root)
+    button2.pack(side=tk.LEFT, fill=tk.X, expand=1)
+
+    def change_destination_directory():
+        global destination_root
+        source_root = filedialog.askdirectory()
+        button1['text'] = source_root
+        window.update()
+
+    button2['command'] = change_source_directory
+
+    columns = ('source', 'action', 'destination')
+    style = ttk.Style()
+    style.theme_use('clam')
+    style.configure(".", font=(None, 14))
+    style.configure("Treeview", rowheight=30)
+    style.configure("Treeview.Heading", font=(None, 14))
+
+    treeview = ttk.Treeview(columns=columns)
+    treeview.heading('#0', text='Source')
+    treeview.heading('#1', text='Action')
+    treeview.heading('#2', text='Destination')
+    treeview.heading('#3', text='Status')
+    treeview.tag_configure('error', foreground='red')
+    treeview.tag_configure('warning', foreground='orange')
+    
+    #treeview.column('#0', width=100, anchor=tk.W)
+    treeview.column('#1', width=100, anchor=tk.CENTER)
+    treeview.column('#2', width=400, anchor=tk.W)
+
+    treeview.pack(fill=tk.BOTH, expand=1)
+    status.pack(fill=tk.BOTH)
+
+    update('Add sources')
+
+    window.mainloop()
+
+
+if __name__ == '__main__':
+    main()
