@@ -5,6 +5,7 @@ from tkinter import filedialog
 from datetime import datetime
 import os
 from os.path import join, islink
+from PIL import ImageTk, Image, ImageOps
 import shutil
 import exifread
 import ffmpeg
@@ -75,47 +76,97 @@ def link_from(file, destination_root):
 
 action = move
 
-class Managed_Directory:
+
+def show_picture(path):
+    root = tk.Toplevel()
+    image = Image.open(path)
+    # Rotate the image if orientation specified
+    image = ImageOps.exif_transpose(image)
+    width, height = image.size
+    image = ImageTk.PhotoImage(image)
+    canvas = tk.Canvas(root, width=width, height=height)
+    root.image= image
+    canvas.create_image(0, 0, image=image, anchor=tk.NW)
+    canvas.pack(side = "bottom", fill = "both", expand = "yes")
+
+
+class Managed_Path:
     def __init__(self, path):
         self.path = path
+
+
+class Managed_Directory(Managed_Path):
+    def __init__(self, path):
+        super().__init__(path)
         self.content = {}
+        self.status = 'unprocessed'
+
+    def set_action(self, action):
+        self.action = action
 
 
-class Managed_File:
+class Managed_File(Managed_Path):
     def __init__(self, path):
-        self.path = path
+        super().__init__(path)
+        self.status = 'unknown'
+        self.action = 'None'
         self.type = magic.from_file(path, mime=True)
-        self.get_date()
+        self.date = datetime.now()
+        #self.get_date()
 
     def __str__(self):
         return f'{self.path} {self.type} {self.date:%m/%d/%Y}'
 
+    def set_action(self, action):
+        self.action = action
+
+
     def get_date(self):
+        # Default to file creation date
+        self.date = datetime.fromtimestamp(os.path.getctime(self.path))
+        
         if self.type == 'video/mp4':
             try:
                 streams = ffmpeg.probe(self.path)["streams"]
                 for stream in streams:
-                    self.date = datetime.fromisoformat(stream["tags"].get('creation_time', '0000-00-00T00:00:00.000000Z'))
-                    return 
-
+                    date_str = stream["tags"].get('creation_time', '0000-00-00T00:00:00.000000Z')
+                    self.status = 'OK'
+                    self.date = datetime.fromisoformat(date_str)
+                    return
             except OSError:
+                self.status = 'OS Error reading tags'
                 print ('Ignoring OSError')
 
-        if self.type == 'image/jpeg':
+        if self.type.startswith('image'):
             with open(self.path, 'rb') as f:
                 try:
                     tags = exifread.process_file(f)
                 except OSError:
-                     print ('Ignoring OSError')
-            if 'EXIF DateTimeOriginal' in tags:
-                date_str = str(tags.get('Image DateTime', tags['EXIF DateTimeOriginal']))
+                    self.status = 'OS Error reading tags'
+                    print ('Ignoring OSError')
+            if 'Image DateTime' in tags and str(tags['Image DateTime']) != '0000:00:00 00:00:00':
+                date_str = str(tags['Image DateTime'])
                 self.date = datetime.strptime(date_str, '%Y:%m:%d %H:%M:%S')
+                self.status = 'OK'
                 return
-            elif 'Image DateTime' in tags:
-                print('found if "Image DateTime" in tags !!!!')
+            elif 'EXIF DateTimeOriginal' in tags and str(tags['EXIF DateTimeOriginal']) != '0000:00:00 00:00:00':
+                date_str = str(tags['EXIF DateTimeOriginal'])
+                self.date = datetime.strptime(date_str, '%Y:%m:%d %H:%M:%S')
+                self.status = 'OK'
+                return
 
+            self.status = 'No date tag on image'
+            return
+        
         print (f'{self.path} ({self.type}) has no date tag, using file creation date')
-        self.date = datetime.fromtimestamp(os.path.getmtime(self.path))
+        self.status = 'Unrecognised file type'
+
+    def get_action(self):
+        match self.action:
+            case 'None':
+                return 'None'
+
+        return f'Unknown action: {self.action}'
 
     def get_destination_dir(self, destination_root):
         path_suffix = os.path.join(f'{self.date:%Y}', f'{self.date:%Y-%m}', f'{self.date:%Y-%m-%d}')
@@ -138,52 +189,202 @@ class Managed_File:
         if os.path.exists(self.get_destination(destination_root)):
             return f'Destination exists!'
 
-        return 'OK'
+        return self.status
 
 
 # Get the list of files starting from the present directory
 all_files = {}
 
-def add_files(root, parent, update):
-    if parent == None:
-        parent = parent=Managed_Directory(root)
-    files = [os.path.abspath(os.path.join(root, file)) for file in os.listdir(root)]
 
-    update(f'Processing {root}')
+class Photo_Manager:
+    def __init__(self, treeview):
+        self.treeview = treeview
+        self.map = {}
 
-    if include_subdirectories:
+    def add_path(self, path, root=None):
+        #update(f'Adding {path}')
+        if root == None:
+            root = Managed_Directory(path)
+        files = [os.path.abspath(os.path.join(path, file)) for file in os.listdir(path)]
+
+        iid = self.treeview.insert('', tk.END, text=path)
+        self.map[iid] = root
+        self.treeview.winfo_toplevel().update()
+
         for directory in [file for file in files if os.path.isdir(file)]:
             managed_directory = Managed_Directory(directory)
-            add_files(directory, managed_directory, update)
+            if include_subdirectories:
+                self.add_files(directory, managed_directory, update, iid)
+            if 'directory' in root.content:
+                root.content['directory'].append(managed_directory)
+            else:  
+                root.content['directory'] = [managed_directory]
+            child_iid = self.treeview.insert(iid, tk.END, text=os.path.basename(managed_directory.path), tags='ignore')
+            self.map[child_iid] = managed_directory
+            dummy = self.treeview.insert(child_iid, tk.END, text='loading directory', tags='ignore')
+            self.treeview.winfo_toplevel().update()
+
+
+        for file in [file for file in files if os.path.isfile(file)]:
+            managed = Managed_File(file)
+            if managed.type in root.content:
+                root.content[managed.type].append(managed)
+            else:  
+                root.content[managed.type] = [managed]
+            status = managed.check()
+            match status:
+                case 'OK':
+                    tag = 'ok'
+                case 'No date tag on image':
+                    tag = 'warning'
+                case _:
+                    tag = 'error'
+            child_iid = self.treeview.insert(iid, tk.END, text=os.path.basename(managed.path), tags=tag,
+                            values=(f'{managed.date:%Y-%m-%d}', managed.get_action(), managed.status))
+            self.map[child_iid] = managed
+            self.treeview.winfo_toplevel().update()
+
+        self.treeview.item(iid, open=True)
+
+        return root
+
+    def remove_tag(self, iid, tag ):
+
+        """ Removes the given tag from the given item, while preserving other tags it may have. """
+
+        current_tags = list( self.treeview.item(iid, 'tags' ) )
+        if tag in current_tags:
+            current_tags.remove( tag )
+            self.treeview.item( iid, tags=current_tags )
+
+
+    def expand(self, item, iid):
+        #update(f'Updating {item.path}')
+        
+        self.remove_tag(iid, 'ignore')
+        files = [os.path.abspath(os.path.join(item.path, file)) for file in os.listdir(item.path)]
+
+        for child in self.treeview.get_children(iid):
+            self.treeview.delete(child)
+
+        self.treeview.winfo_toplevel().update()
+
+        for directory in [file for file in files if os.path.isdir(file)]:
+            managed_directory = Managed_Directory(directory)
+            if include_subdirectories:
+                self.add_files(directory, managed_directory, iid)
+            if 'directory' in item.content:
+                item.content['directory'].append(managed_directory)
+            else:  
+                item.content['directory'] = [managed_directory]
+            child_iid = self.treeview.insert(iid, tk.END, text=os.path.basename(managed_directory.path), tags='ignore')
+            self.map[child_iid] = managed_directory
+            dummy = self.treeview.insert(child_iid, tk.END, text='loading directory', tags='ignore')
+            self.treeview.winfo_toplevel().update()
+
+
+        for file in [file for file in files if os.path.isfile(file)]:
+            managed = Managed_File(file)
+            if managed.type in item.content:
+                item.content[managed.type].append(managed)
+            else:  
+                item.content[managed.type] = [managed]
+            status = managed.check()
+            match status:
+                case 'OK':
+                    tag = 'ok'
+                case 'No date tag on image':
+                    tag = 'warning'
+                case _:
+                    tag = 'error'
+            child_iid = self.treeview.insert(iid, tk.END, text=os.path.basename(managed.path), tags=tag,
+                            values=(f'{managed.date:%Y-%m-%d}', managed.get_action(), managed.status))
+            self.map[child_iid] = managed
+            self.treeview.winfo_toplevel().update()
+        self.treeview.item(iid, open=True)
+
+
+    def add_files(self, root, parent, update, parent_iid=''):
+        if parent == None:
+            parent = Managed_Directory(root)
+        files = [os.path.abspath(os.path.join(root, file)) for file in os.listdir(root)]
+
+        update(f'Processing {root}')
+        path = parent.path
+        iid = self.treeview.insert(parent_iid, tk.END, text=path)
+        self.treeview.winfo_toplevel().update()
+
+        for directory in [file for file in files if os.path.isdir(file)]:
+            managed_directory = Managed_Directory(directory)
+            if include_subdirectories:
+                self.add_files(directory, managed_directory, update, iid)
             if 'directory' in parent.content:
                 parent.content['directory'].append(managed_directory)
             else:  
                 parent.content['directory'] = [managed_directory]
+            child_iid = self.treeview.insert(iid, tk.END, text=os.path.basename(managed_directory.path), tags='ignore')
+            dummy = self.treeview.insert(child_iid, tk.END, text='loading directory', tags='ignore')
+            self.treeview.winfo_toplevel().update()
 
-    for file in [file for file in files if os.path.isfile(file)]:
-        managed = Managed_File(file)
-        if managed.type in parent.content:
-            parent.content[managed.type].append(managed)
-        else:  
-            parent.content[managed.type] = [managed]
 
-    return parent
+        for file in [file for file in files if os.path.isfile(file)]:
+            managed = Managed_File(file)
+            if managed.type in parent.content:
+                parent.content[managed.type].append(managed)
+            else:  
+                parent.content[managed.type] = [managed]
+            status = managed.check()
+            match status:
+                case 'OK':
+                    tag = 'ok'
+                case 'No date tag on image':
+                    tag = 'warning'
+                case _:
+                    tag = 'error'
+            self.treeview.insert(iid, tk.END, text=os.path.basename(managed.path), tags=tag,
+                            values=(f'{managed.date:%Y-%m-%d}', managed.get_action(), managed.status))
+            self.treeview.winfo_toplevel().update()
+
+        return parent
 
 
 def populate_tree(tree, source, parent=''):
     path = source.path if parent == '' else os.path.basename(source.path)
     iid = tree.insert(parent, tk.END, text=path)
+    
     if 'directory' in source.content:
         for item in source.content['directory']:
-            populate_tree(tree, item, iid)
+            if item.status == 'processed':
+                populate_tree(tree, item, iid)
+            else:
+                dir_iid = tree.insert(iid, tk.END, text=os.path.basename(item.path), tags='ignore')
+                # Add a dummy entry to allow the directory to be opened
+                dummy = tree.insert(dir_iid, tk.END, text='processing directory', tags='ignore')
 
-    if 'image/jpeg' in source.content:
-        for item in source.content['image/jpeg']:
+    types = source.content.keys()
+    image_types = [type for type in types if type.startswith('image')]
+
+    for image_type in image_types:
+        for item in source.content[image_type]:
             status = item.check()
-            tag = 'ok' if status == 'OK' else 'error'
+            match status:
+                case 'OK':
+                    tag = 'ok'
+                case 'No date tag on image':
+                    tag = 'warning'
+                case _:
+                    tag = 'error'
  
             tree.insert(iid, tk.END, text=os.path.basename(item.path), tags=tag,
-                        values=('Move', item.get_destination(destination_root), status))
+                        values=(f'{item.date:%Y-%m-%d}', item.get_action(), item.status))
+
+
+def get_full_path(item_iid, treeview):
+    path = treeview.item(item_iid, 'text')
+    parent_iid = treeview.parent(item_iid)
+    path = os.path.join(treeview.item(parent_iid, 'text'), path)
+    return path
+
 
 def main():
     all_files = {}
@@ -212,13 +413,23 @@ def main():
 
     button1['command'] =change_source_directory
 
+    columns = ('source', 'action', 'destination')
+    style = ttk.Style()
+    style.theme_use('clam')
+    style.configure(".", font=(None, 14))
+    style.configure("Treeview", rowheight=30)
+    style.configure("Treeview.Heading", font=(None, 14))
+    treeview = ttk.Treeview(columns=columns)
+    
+    manager = Photo_Manager(treeview)
+
     def add_source_directory():
         global include_subdirectories
         include_subdirectories = False
         update('updating')
         print(source_root)
-        all_files = add_files(os.path.abspath(source_root), Managed_Directory(source_root), update)
-        populate_tree(treeview, all_files)
+        all_files = manager.add_path(os.path.abspath(source_root))
+        #populate_tree(treeview, all_files)
         update('Ready')
 
     add_source_button = ttk.Button(source_frame, text='Add', command=add_source_directory)
@@ -229,14 +440,12 @@ def main():
         include_subdirectories = True
         update('updating')
         print(source_root)
-        all_files = add_files(os.path.abspath(source_root), Managed_Directory(source_root), update)
-        populate_tree(treeview, all_files)
+        all_files = manager.add_files(os.path.abspath(source_root), Managed_Directory(source_root), update)
+        #populate_tree(treeview, all_files)
         update('Ready')
 
     add_source_button = ttk.Button(source_frame, text='Add All', command=add_width_childen)
     add_source_button.pack(side=tk.LEFT)
-
-
     
     destination_frame = tk.Frame(window)
     destination_frame.pack(fill=tk.X)
@@ -258,26 +467,74 @@ def main():
 
     button2['command'] = change_source_directory
 
-    columns = ('source', 'action', 'destination')
-    style = ttk.Style()
-    style.theme_use('clam')
-    style.configure(".", font=(None, 14))
-    style.configure("Treeview", rowheight=30)
-    style.configure("Treeview.Heading", font=(None, 14))
 
-    treeview = ttk.Treeview(columns=columns)
+    def double_click(event):
+        item = treeview.identify('item', event.x, event.y)
+        show_picture(get_full_path(item, treeview))
+
+    def update_content(event):
+        x = treeview.winfo_pointerx() - treeview.winfo_rootx()
+        y = treeview.winfo_pointery() - treeview.winfo_rooty()
+        print (x, y)
+        iid = treeview.identify('item', x, y)
+        item = manager.map[iid]
+        manager.expand(item, iid)
+
+    def update_selection(action):
+        for item in treeview.selection():
+            print (manager.map[item])
+            #item.set_action(action)
+
+    def ignore_callback(event):
+        global move
+        update_selection('None')
+
+    def move_callback():
+        global move
+        update_selection(move)
+
+    def copy_callback():
+        global copy
+        update_selection(copy)
+
+    def link_to_callback():
+        global link_to
+        update_selection(link_to)
+
+    def link_from_callback():
+        global link_from
+        update_selection(link_from)
+
     treeview.heading('#0', text='Source')
-    treeview.heading('#1', text='Action')
-    treeview.heading('#2', text='Destination')
+    treeview.heading('#1', text='Date')
+    treeview.heading('#2', text='Action')
     treeview.heading('#3', text='Status')
+    treeview.tag_configure('ignore', foreground='grey')
+    treeview.tag_configure('unknonw', foreground='lightblue')
     treeview.tag_configure('error', foreground='red')
     treeview.tag_configure('warning', foreground='orange')
-    
+    treeview.bind("<Double-1>", double_click)
+    treeview.bind('<<TreeviewOpen>>', update_content)
+
     #treeview.column('#0', width=100, anchor=tk.W)
     treeview.column('#1', width=100, anchor=tk.CENTER)
     treeview.column('#2', width=400, anchor=tk.W)
 
     treeview.pack(fill=tk.BOTH, expand=1)
+
+    button_frame = tk.Frame(window)
+    button_frame.pack(fill=tk.X)
+    ignore = ttk.Button(button_frame, text="Ignore", command=ignore_callback)
+    ignore.pack(side=tk.LEFT, fill=tk.BOTH, expand=1)
+    move = ttk.Button(button_frame, text="Move", command=move_callback)
+    move.pack(side=tk.LEFT, fill=tk.BOTH, expand=1)
+    copy = ttk.Button(button_frame, text="Copy", command=move_callback)
+    copy.pack(side=tk.LEFT, fill=tk.BOTH, expand=1)
+    link_from = ttk.Button(button_frame, text="Link From", command=move_callback)
+    link_from.pack(side=tk.LEFT, fill=tk.BOTH, expand=1)
+    link_to = ttk.Button(button_frame, text="Link To", command=move_callback)
+    link_to.pack(side=tk.LEFT, fill=tk.BOTH, expand=1)
+    
     status.pack(fill=tk.BOTH)
 
     update('Add sources')
