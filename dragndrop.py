@@ -19,7 +19,7 @@ class Drop_Target_Interface(object):
 
     def get_handle(self):
         """Returns the handle used  for OS deag and drop registration."""
-        print "%s, should define get handle function." % (type(self))
+        print ("%s, should define get handle function." % (type(self)))
         return None
  
     def drag_enter(self, key, point, effect):
@@ -56,7 +56,7 @@ class Drop_Target_Interface(object):
                 #        files.append(win32api.DragQueryFile(result.data_handle, file_number))
                 #    self.drop_file(files, point)
         except:
-            print "Unexpected error:", sys.exc_info()[0]
+            print ("Unexpected error:", sys.exc_info()[0])
         return winerror.S_OK
 
 if os.name == 'nt':
@@ -150,7 +150,7 @@ if os.name == 'nt':
                 effect = 4
                 self.target.drag_enter(key, point, effect)
             except:
-                print "Unexpected error:", sys.exc_info()[0]
+                print ("Unexpected error:", sys.exc_info()[0])
             finally:
                 return winerror.S_OK
 
@@ -162,7 +162,7 @@ if os.name == 'nt':
                 effect = 4
                 self.target.drag_over(key, point, effect)
             except:
-                print "Unexpected error:", sys.exc_info()
+                print ("Unexpected error:", sys.exc_info())
             finally:
                 return winerror.S_OK
 
@@ -173,7 +173,7 @@ if os.name == 'nt':
                     self.helper.DragLeave()
                 self.target.drag_leave_()
             except:
-                print "Unexpected error:", sys.exc_info()[0]
+                print ("Unexpected error:", sys.exc_info()[0])
             finally:
                 return winerror.S_OK
 
@@ -183,7 +183,7 @@ if os.name == 'nt':
                 if self.target:
                     self.target.drop(data, key, point, effect)
             except:
-                print "Unexpected error:", sys.exc_info()[0]
+                print ("Unexpected error:", sys.exc_info()[0])
             return winerror.S_OK
 
 else:
@@ -222,7 +222,7 @@ else:
                 effect = 4
                 self.window.drag_enter(key, point, effect)
             except:
-                print "Unexpected error:", sys.exc_info()[0]
+                print ("Unexpected error:", sys.exc_info()[0])
             finally:
                 return True
 
@@ -234,7 +234,7 @@ else:
                 effect = 4
                 self.window.drag_over(key, point, effect)
             except:
-                print "Unexpected error:", sys.exc_info()[0]
+                print ("Unexpected error:", sys.exc_info()[0])
             finally:
                 return True
 
@@ -245,7 +245,7 @@ else:
                     self.helper.DragLeave()
                 self.window.drag_leave()
             except:
-                print "Unexpected error:", sys.exc_info()[0]
+                print ("Unexpected error:", sys.exc_info()[0])
             finally:
                 return True
 
@@ -254,7 +254,7 @@ else:
             try:
                 self.window.drop()
             except:
-                print "Unexpected error:", sys.exc_info()[0]
+                print ("Unexpected error:", sys.exc_info()[0])
             return True
 
 class Test_Module:
