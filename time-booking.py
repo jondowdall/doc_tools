@@ -120,7 +120,7 @@ class User(object):
             name = pwd.getpwuid(uid)[0]
             return (name, uid)
         else:
-            print "Unknown OS!"
+            print ("Unknown OS!")
 
 def find(func, seq):
     """Return first item in sequence where func(item) == True."""
@@ -295,7 +295,7 @@ def accumulate_hours(task_manager):
     task_list = expand_list(task_manager.tasks)
 
     for task in task_list:
-        print task.name, get_decimal_hours(task.allocated_time)
+        print (task.name, get_decimal_hours(task.allocated_time))
 
 class Configuration(dict):
     """Manage the application configuration."""
@@ -334,8 +334,8 @@ class Configuration(dict):
                 self['image_root'] = '../' + self['image_root']
             else:
                 # Cannot display GUI error before completing configuration
-                # initialisation, so print to console
-                print 'Incorrect Path', \
+                # initialisation, so print (to console)
+                print ('Incorrect Path', \)
                       "Image path %s doesn't exist" % (self['image_root'])
 
         self['image_path_16'] = self['image_root'] + '/' + self['image_small']
@@ -354,7 +354,7 @@ class Configuration(dict):
 
         if options.verbose:
             for key in self.keys():
-                print "configuration[%s] = %s" % (key, self[key])
+                print ("configuration[%s] = %s" % (key, self[key]))
         self.__dict__['initialised'] = True
 
     def load(self, config_file):
@@ -3578,7 +3578,7 @@ class Task(object):
 
     def show(self, level = 0):
         """Display the task and sub tasks."""
-        print "%s%s" % (' ' * level, self.full_name())
+        print ("%s%s" % (' ' * level, self.full_name()))
         for child in self.children:
             child.show(level + 1)
 
@@ -4435,7 +4435,7 @@ class Activity_Manager(object):
     def show(self):
         """Display the times for current tasks."""
         for activity in self.activities:
-            print activity
+            print (activity)
 
     def to_xml(self, filename):
         """Writes the current session data to file."""
